@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 
+
 # -----------------------------
 # Load and normalize workbook
 # -----------------------------
@@ -99,6 +100,10 @@ def load_oasis_excel(file):
         if c not in merged.columns:
             merged[c] = pd.NA
 
+    # Force these to string for consistency
+    for c in ["Domain", "NAICS", "SIN", "Pool"]:
+        merged[c] = merged[c].astype(str)
+
     return merged
 
 
@@ -159,132 +164,139 @@ if not uploaded_file:
 try:
     data = load_oasis_excel(uploaded_file)
 except Exception as e:
-    st.error(f"Error loading file:\n\n{e}")
+    st.error("Error loading file:")
+    st.exception(e)
     st.stop()
 
-
-# -----------------------------
-# Sidebar Filters
-# -----------------------------
-
-st.sidebar.header("Filters")
-
-search = st.sidebar.text_input("Search Vendor / UEI / Contract")
-
-# Pool options
-if "Pool" in data.columns:
-    pool_opts = sorted(set(map(str, data["Pool"].dropna().tolist())))
-else:
-    pool_opts = []
-pools = st.sidebar.multiselect("Pool", pool_opts)
-
-# Domain options
-if "Domain" in data.columns:
-    domain_opts = sorted(set(map(str, data["Domain"].dropna().tolist())))
-else:
-    domain_opts = []
-domains = st.sidebar.multiselect("Domain", domain_opts)
-
-# NAICS options
-if "NAICS" in data.columns:
-    naics_opts = sorted(set(map(str, data["NAICS"].dropna().tolist())))
-else:
-    naics_opts = []
-naics = st.sidebar.multiselect("NAICS", naics_opts)
-
-# SIN options
-if "SIN" in data.columns:
-    sin_opts = sorted(set(map(str, data["SIN"].dropna().tolist())))
-else:
-    sin_opts = []
-sins = st.sidebar.multiselect("SIN", sin_opts)
-
-# Apply filters
-filtered = apply_filters(data, search, pools, domains, naics, sins)
+st.success("✅ Excel file loaded and merged successfully.")
+st.write("Preview of merged data:", data.head())
 
 
-# -----------------------------
-# Summary Metrics
-# -----------------------------
+# Wrap the rest of the app so ANY error shows up in the UI instead of 'Oh no'
+try:
+    # -----------------------------
+    # Sidebar Filters
+    # -----------------------------
 
-col1, col2, col3, col4 = st.columns(4)
+    st.sidebar.header("Filters")
 
-col1.metric("Rows", f"{len(filtered):,}")
-col2.metric("Unique Vendors", f"{filtered['Vendor Display'].nunique():,}")
-col3.metric("Unique NAICS Codes", f"{filtered['NAICS'].astype(str).nunique():,}")
-col4.metric("Pools", f"{filtered['Pool'].astype(str).nunique():,}")
+    search = st.sidebar.text_input("Search Vendor / UEI / Contract")
 
-st.divider()
-
-
-# -----------------------------
-# Data Table
-# -----------------------------
-
-st.subheader("Filtered Results")
-
-cols = [
-    "Vendor Display",
-    "Pool",
-    "Domain",
-    "SIN",
-    "NAICS",
-    "Contract Number",
-    "UEI",
-    "Vendor City",
-    "ZIP Code",
-]
-
-cols = [c for c in cols if c in filtered.columns]
-
-st.dataframe(filtered[cols], use_container_width=True, hide_index=True)
-
-st.download_button(
-    "Download CSV",
-    filtered.to_csv(index=False),
-    "oasis_filtered_export.csv",
-    "text/csv"
-)
-
-
-# -----------------------------
-# Visualizations
-# -----------------------------
-
-st.subheader("Visualizations")
-
-tab1, tab2, tab3 = st.tabs(["Vendors per Pool", "Top NAICS", "Domains"])
-
-with tab1:
-    if not filtered.empty:
-        chart = (
-            filtered.groupby("Pool")["Vendor Display"]
-            .nunique()
-            .sort_values(ascending=False)
-        )
-        st.bar_chart(chart)
+    # Pool options
+    if "Pool" in data.columns:
+        pool_opts = sorted(set(map(str, data["Pool"].dropna().tolist())))
     else:
-        st.info("No data to display for current filters.")
+        pool_opts = []
+    pools = st.sidebar.multiselect("Pool", pool_opts)
 
-with tab2:
-    if not filtered.empty:
-        chart = (
-            filtered.groupby("NAICS")["Vendor Display"]
-            .nunique()
-            .sort_values(ascending=False)
-            .head(20)
-        )
-        st.bar_chart(chart)
+    # Domain options
+    if "Domain" in data.columns:
+        domain_opts = sorted(set(map(str, data["Domain"].dropna().tolist())))
     else:
-        st.info("No data to display for current filters.")
+        domain_opts = []
+    domains = st.sidebar.multiselect("Domain", domain_opts)
 
-with tab3:
-    if not filtered.empty:
-        chart = (
-            filtered.groupby("Domain")["Vendor Display"]
-            .nunique()
-            .sort_values(ascending=False)
-        )
-        st.bar_chart(chart)
+    # NAICS options
+    if "NAICS" in data.columns:
+        naics_opts = sorted(set(map(str, data["NAICS"].dropna().tolist())))
     else:
-        st.info("No data to display for current filters.")
+        naics_opts = []
+    naics = st.sidebar.multiselect("NAICS", naics_opts)
+
+    # SIN options
+    if "SIN" in data.columns:
+        sin_opts = sorted(set(map(str, data["SIN"].dropna().tolist())))
+    else:
+        sin_opts = []
+    sins = st.sidebar.multiselect("SIN", sin_opts)
+
+    # Apply filters
+    filtered = apply_filters(data, search, pools, domains, naics, sins)
+
+    # -----------------------------
+    # Summary Metrics
+    # -----------------------------
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric("Rows", f"{len(filtered):,}")
+    col2.metric("Unique Vendors", f"{filtered['Vendor Display'].nunique():,}")
+    col3.metric("Unique NAICS Codes", f"{filtered['NAICS'].astype(str).nunique():,}")
+    col4.metric("Pools", f"{filtered['Pool'].astype(str).nunique():,}")
+
+    st.divider()
+
+    # -----------------------------
+    # Data Table
+    # -----------------------------
+
+    st.subheader("Filtered Results")
+
+    cols = [
+        "Vendor Display",
+        "Pool",
+        "Domain",
+        "SIN",
+        "NAICS",
+        "Contract Number",
+        "UEI",
+        "Vendor City",
+        "ZIP Code",
+    ]
+
+    cols = [c for c in cols if c in filtered.columns]
+
+    st.dataframe(filtered[cols], use_container_width=True, hide_index=True)
+
+    st.download_button(
+        "Download CSV",
+        filtered.to_csv(index=False),
+        "oasis_filtered_export.csv",
+        "text/csv"
+    )
+
+    # -----------------------------
+    # Visualizations
+    # -----------------------------
+
+    st.subheader("Visualizations")
+
+    tab1, tab2, tab3 = st.tabs(["Vendors per Pool", "Top NAICS", "Domains"])
+
+    with tab1:
+        if not filtered.empty:
+            chart = (
+                filtered.groupby("Pool")["Vendor Display"]
+                .nunique()
+                .sort_values(ascending=False)
+            )
+            st.bar_chart(chart)
+        else:
+            st.info("No data to display for current filters.")
+
+    with tab2:
+        if not filtered.empty:
+            chart = (
+                filtered.groupby("NAICS")["Vendor Display"]
+                .nunique()
+                .sort_values(ascending=False)
+                .head(20)
+            )
+            st.bar_chart(chart)
+        else:
+            st.info("No data to display for current filters.")
+
+    with tab3:
+        if not filtered.empty:
+            chart = (
+                filtered.groupby("Domain")["Vendor Display"]
+                .nunique()
+                .sort_values(ascending=False)
+            )
+            st.bar_chart(chart)
+        else:
+            st.info("No data to display for current filters.")
+
+except Exception as e:
+    st.error("❌ An error occurred while rendering the app UI:")
+    st.exception(e)
