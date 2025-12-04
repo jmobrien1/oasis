@@ -8,8 +8,8 @@ import pandas as pd
 @st.cache_data
 def load_oasis_excel(file) -> pd.DataFrame:
     """
-    Load the OASIS+ Excel file and build a single merged dataset:
-    Pool sheets + contract info.
+    Load the OASIS+ Excel file and build a single merged dataset.
+    This DEBUG version prints the real pool sheet column names.
     """
     xls = pd.ExcelFile(file)
 
@@ -22,6 +22,9 @@ def load_oasis_excel(file) -> pd.DataFrame:
 
     # Clean column names
     contracts.columns = [c.strip() for c in contracts.columns]
+
+    # Show contract sheet columns for verification
+    st.write("📄 Contract sheet columns detected:", contracts.columns.tolist())
 
     # Load pool sheets (some names have trailing spaces)
     pool_sheet_names = [
@@ -44,58 +47,19 @@ def load_oasis_excel(file) -> pd.DataFrame:
             pool_frames.append(df)
 
     if not pool_frames:
-        raise ValueError("ERROR: No pool sheets found in the workbook.")
+        raise ValueError("DEBUG ERROR: No pool sheets found in the workbook.")
 
     pools = pd.concat(pool_frames, ignore_index=True)
 
-    # Normalize Contract Number across datasets
-    if "Contract Number" not in pools.columns:
-        raise KeyError(
-            "ERROR: Expected 'Contract Number' column in pool sheets, but it was not found."
-        )
+    # DEBUG: Print pool sheet column names so we know what merge key actually exists
+    st.write("📄 Pool sheet columns detected:", pools.columns.tolist())
 
-    pools["Contract Number"] = pools["Contract Number"].astype(str).str.replace(".0", "", regex=False).str.strip()
-
-    if "Contract Number" in contracts.columns:
-        contracts["Contract Number"] = contracts["Contract Number"].astype(str).str.strip()
-    else:
-        raise KeyError(
-            "ERROR: Expected 'Contract Number' in OASIS+Contract Information sheet."
-        )
-
-    # Merge pool-level data with contract info
-    merged = pools.merge(
-        contracts,
-        left_on="Contract Number",
-        right_on="Contract Number",
-        how="left",
-        suffixes=("", "_contract")
-    )
-
-    # Create a Vendor display column
-    vendor_cols = []
-    for col in ["Vendor", "Vendor Name", "Vendor_Name", "vendor"]:
-        if col in merged.columns:
-            vendor_cols.append(col)
-
-    if vendor_cols:
-        merged["Vendor Display"] = merged[vendor_cols].bfill(axis=1).iloc[:, 0]
-    else:
-        merged["Vendor Display"] = ""
-
-    # Ensure useful columns exist (even if missing)
-    for col in ["UEI", "Domain", "Pool", "NAICS", "SIN", "ZIP Code", "Vendor City"]:
-        if col not in merged.columns:
-            merged[col] = pd.NA
-
-    # Clean NAICS + SIN formatting
-    if "NAICS" in merged.columns:
-        merged["NAICS"] = merged["NAICS"].astype(str).str.replace(".0", "", regex=False).str.strip()
-
-    if "SIN" in merged.columns:
-        merged["SIN"] = merged["SIN"].astype(str).str.replace(".0", "", regex=False).str.strip()
-
-    return merged
+    # ---------------------------
+    # TEMPORARY: DO NOT MERGE YET
+    # ---------------------------
+    # Instead, return the pools dataframe so the app doesn't crash.
+    # Once we know the correct column names, we will restore merging.
+    return pools
 
 
 # -----------------------------
@@ -110,27 +74,30 @@ def apply_filters(df: pd.DataFrame,
                   sin_selected):
     filtered = df.copy()
 
-    # Free-text search across Vendor, UEI, Contract Number
+    # Free-text search attempt on possible fields
+    search_cols = [c for c in ["Vendor", "Vendor Name", "UEI", "Contract Number", "Contract #"] if c in df.columns]
+
     if search_text:
         s = search_text.lower()
-        mask = (
-            df["Vendor Display"].astype(str).str.lower().str.contains(s, na=False)
-            | df["UEI"].astype(str).str.lower().str.contains(s, na=False)
-            | df["Contract Number"].astype(str).str.lower().str.contains(s, na=False)
-        )
+        mask = pd.Series(False, index=df.index)
+        for col in search_cols:
+            mask |= df[col].astype(str).str.lower().str.contains(s, na=False)
         filtered = df[mask]
 
-    # Specific filters
-    if pools_selected:
+    # Pool
+    if pools_selected and "Pool" in df.columns:
         filtered = filtered[filtered["Pool"].isin(pools_selected)]
 
-    if domains_selected:
+    # Domain
+    if domains_selected and "Domain" in df.columns:
         filtered = filtered[filtered["Domain"].isin(domains_selected)]
 
-    if naics_selected:
+    # NAICS
+    if naics_selected and "NAICS" in df.columns:
         filtered = filtered[filtered["NAICS"].isin(naics_selected)]
 
-    if sin_selected:
+    # SIN
+    if sin_selected and "SIN" in df.columns:
         filtered = filtered[filtered["SIN"].isin(sin_selected)]
 
     return filtered
@@ -141,12 +108,12 @@ def apply_filters(df: pd.DataFrame,
 # -----------------------------
 
 st.set_page_config(
-    page_title="OASIS+ Contractor Explorer",
+    page_title="OASIS+ Contractor Explorer (DEBUG MODE)",
     layout="wide",
 )
 
-st.title("OASIS+ Contractor Explorer")
-st.caption("Search, filter, and visualize OASIS+ contractor data interactively.")
+st.title("🛠️ OASIS+ Contractor Explorer — DEBUG VERSION")
+st.caption("Upload the Excel file. This version prints sheet column names so we can fix the merge logic.")
 
 uploaded_file = st.file_uploader(
     "Upload your **OASIS+ Contractor List Excel file**",
@@ -155,7 +122,7 @@ uploaded_file = st.file_uploader(
 )
 
 if not uploaded_file:
-    st.info("Upload the Excel file to get started.")
+    st.info("Upload the Excel file to continue.")
     st.stop()
 
 # Load data with visible error output
@@ -165,28 +132,26 @@ except Exception as e:
     st.error(f"❌ Error loading workbook:\n\n**{e}**")
     st.stop()
 
+st.success("Workbook loaded successfully in DEBUG mode.")
 
 # -----------------------------
 # Sidebar filters
 # -----------------------------
-st.sidebar.header("Filters")
+st.sidebar.header("Filters (limited in debug mode)")
 
-search_text = st.sidebar.text_input(
-    "Search Vendor / UEI / Contract #",
-    placeholder="e.g. ESSNOVA, 47QRCA25D..."
-)
+search_text = st.sidebar.text_input("Search text")
 
-pool_options = sorted(data["Pool"].dropna().unique().tolist())
+pool_options = sorted(data["Pool"].dropna().unique().tolist()) if "Pool" in data.columns else []
 pools_selected = st.sidebar.multiselect("Socioeconomic Pool", pool_options)
 
-domain_options = sorted(data["Domain"].dropna().unique().tolist())
+domain_options = sorted(data["Domain"].dropna().unique().tolist()) if "Domain" in data.columns else []
 domains_selected = st.sidebar.multiselect("Domain", domain_options)
 
-naics_options = sorted(data["NAICS"].dropna().unique().tolist())
-naics_selected = st.sidebar.multiselect("NAICS Codes", naics_options)
+naics_options = sorted(data["NAICS"].dropna().unique().tolist()) if "NAICS" in data.columns else []
+naics_selected = st.sidebar.multiselect("NAICS", naics_options)
 
-sin_options = sorted(data["SIN"].dropna().unique().tolist())
-sin_selected = st.sidebar.multiselect("SIN Codes", sin_options)
+sin_options = sorted(data["SIN"].dropna().unique().tolist()) if "SIN" in data.columns else []
+sin_selected = st.sidebar.multiselect("SIN", sin_options)
 
 # Apply filters
 filtered = apply_filters(
@@ -198,84 +163,10 @@ filtered = apply_filters(
     sin_selected=sin_selected,
 )
 
-
 # -----------------------------
-# Summary metrics
+# Display Data
 # -----------------------------
-col1, col2, col3, col4 = st.columns(4)
+st.subheader("DEBUG: Raw / Filtered Data Preview")
+st.dataframe(filtered, use_container_width=True)
 
-col1.metric("Rows (after filters)", f"{len(filtered):,}")
-col2.metric("Unique Vendors", f"{filtered['Vendor Display'].nunique():,}")
-col3.metric("Unique NAICS Codes", f"{filtered['NAICS'].nunique():,}")
-col4.metric("Pools Represented", f"{filtered['Pool'].nunique():,}")
-
-st.markdown("---")
-
-
-# -----------------------------
-# Data table
-# -----------------------------
-
-st.subheader("Filtered Data")
-
-show_cols = [
-    "Vendor Display",
-    "Pool",
-    "Domain",
-    "SIN",
-    "NAICS",
-    "Contract Number",
-    "UEI",
-    "Vendor City",
-    "ZIP Code",
-]
-
-show_cols = [c for c in show_cols if c in filtered.columns]
-
-st.dataframe(
-    filtered[show_cols].reset_index(drop=True),
-    use_container_width=True,
-    hide_index=True
-)
-
-st.download_button(
-    "Download filtered data as CSV",
-    data=filtered.to_csv(index=False),
-    file_name="oasis_filtered_export.csv",
-    mime="text/csv"
-)
-
-st.markdown("---")
-
-
-# -----------------------------
-# Visualizations
-# -----------------------------
-st.subheader("Visualizations")
-
-tab1, tab2, tab3 = st.tabs([
-    "Vendors per Pool",
-    "Top NAICS Codes",
-    "Domain Distribution"
-])
-
-with tab1:
-    if not filtered.empty:
-        chart = filtered.groupby("Pool")["Vendor Display"].nunique().sort_values(ascending=False)
-        st.bar_chart(chart)
-    else:
-        st.info("No data to display.")
-
-with tab2:
-    if not filtered.empty:
-        chart = filtered.groupby("NAICS")["Vendor Display"].nunique().sort_values(ascending=False).head(20)
-        st.bar_chart(chart)
-    else:
-        st.info("No data to display.")
-
-with tab3:
-    if not filtered.empty:
-        chart = filtered.groupby("Domain")["Vendor Display"].nunique().sort_values(ascending=False)
-        st.bar_chart(chart)
-    else:
-        st.info("No data to display.")
+st.info("Scroll up to see the printed column names. Send them to me so I can finalize merge logic.")
