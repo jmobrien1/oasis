@@ -9,14 +9,16 @@ import pandas as pd
 def load_oasis_excel(file):
     xls = pd.ExcelFile(file)
 
-    # Load Contract Information (header row is row 2 → header=1)
+    # --- Contract Information sheet ---
     contracts = pd.read_excel(
         file,
         sheet_name="OASIS+Contract Information",
         header=1
     )
-
     contracts.columns = [c.strip() for c in contracts.columns]
+
+    if "Contract Number" not in contracts.columns:
+        raise KeyError("Expected 'Contract Number' in OASIS+Contract Information sheet.")
 
     # Normalize Contract Number
     contracts["Contract Number"] = (
@@ -26,7 +28,7 @@ def load_oasis_excel(file):
         .str.strip()
     )
 
-    # Identify pool sheets
+    # --- Pool sheets ---
     pool_names = [
         "8a",
         "Small Business",
@@ -38,7 +40,6 @@ def load_oasis_excel(file):
     ]
 
     pool_frames = []
-
     for sheet in xls.sheet_names:
         if sheet.strip() in [p.strip() for p in pool_names]:
             df = pd.read_excel(file, sheet_name=sheet)
@@ -51,7 +52,10 @@ def load_oasis_excel(file):
 
     pools = pd.concat(pool_frames, ignore_index=True)
 
-    # Normalize pool Contract #
+    if "Contract #" not in pools.columns:
+        raise KeyError("Expected 'Contract #' column in pool sheets.")
+
+    # Normalize Contract # in pools
     pools["Contract #"] = (
         pools["Contract #"]
         .astype(str)
@@ -59,7 +63,7 @@ def load_oasis_excel(file):
         .str.strip()
     )
 
-    # Normalize NAICS & SIN
+    # Normalize NAICS & SIN in pools if present
     for col in ["NAICS", "SIN"]:
         if col in pools.columns:
             pools[col] = (
@@ -69,7 +73,7 @@ def load_oasis_excel(file):
                 .str.strip()
             )
 
-    # Merge pool-level sheets with contract info sheet
+    # Merge pools with contract info
     merged = pools.merge(
         contracts,
         left_on="Contract #",
@@ -78,15 +82,20 @@ def load_oasis_excel(file):
         suffixes=("", "_contract")
     )
 
-    # Vendor Display
-    merged["Vendor Display"] = (
-        merged.get("Vendor")
-        .fillna(merged.get("Vendor Name"))
-        .fillna("")
-    )
+    # Build Vendor Display
+    vendor_cols = [c for c in ["Vendor", "Vendor Name"] if c in merged.columns]
+    if vendor_cols:
+        merged["Vendor Display"] = (
+            merged[vendor_cols]
+            .bfill(axis=1)
+            .iloc[:, 0]
+            .fillna("")
+        )
+    else:
+        merged["Vendor Display"] = ""
 
     # Ensure expected columns exist
-    for c in ["Domain", "NAICS", "SIN", "Pool"]:
+    for c in ["Domain", "NAICS", "SIN", "Pool", "UEI", "Vendor City", "ZIP Code"]:
         if c not in merged.columns:
             merged[c] = pd.NA
 
@@ -97,33 +106,35 @@ def load_oasis_excel(file):
 # Filtering logic
 # -----------------------------
 
-def apply_filters(df, search, pools, domains, naics, sin):
-    filt = df.copy()
+def apply_filters(df, search, pools, domains, naics, sins):
+    filtered = df.copy()
 
+    # Text search across common fields
     if search:
         s = search.lower()
-        cols = ["Vendor Display", "UEI", "Contract Number", "Contract #"]
         mask = False
+        for col in ["Vendor Display", "UEI", "Contract Number", "Contract #"]:
+            if col in filtered.columns:
+                mask = mask | filtered[col].astype(str).str.lower().str.contains(s, na=False)
+        filtered = filtered[mask]
 
-        for col in cols:
-            if col in filt.columns:
-                mask = mask | filt[col].astype(str).str.lower().str.contains(s, na=False)
-
-        filt = filt[mask]
-
+    # Pool filter
     if pools:
-        filt = filt[filt["Pool"].isin(pools)]
+        filtered = filtered[filtered["Pool"].astype(str).isin(pools)]
 
+    # Domain filter
     if domains:
-        filt = filt[filt["Domain"].isin(domains)]
+        filtered = filtered[filtered["Domain"].astype(str).isin(domains)]
 
+    # NAICS filter
     if naics:
-        filt = filt[filt["NAICS"].isin(naics)]
+        filtered = filtered[filtered["NAICS"].astype(str).isin(naics)]
 
-    if sin:
-        filt = filt[filt["SIN"].isin(sin)]
+    # SIN filter
+    if sins:
+        filtered = filtered[filtered["SIN"].astype(str).isin(sins)]
 
-    return filt
+    return filtered
 
 
 # -----------------------------
@@ -141,8 +152,10 @@ uploaded_file = st.file_uploader(
 )
 
 if not uploaded_file:
+    st.info("Upload your OASIS+ Contractor List Excel file to begin.")
     st.stop()
 
+# Load data
 try:
     data = load_oasis_excel(uploaded_file)
 except Exception as e:
@@ -158,19 +171,37 @@ st.sidebar.header("Filters")
 
 search = st.sidebar.text_input("Search Vendor / UEI / Contract")
 
-pool_opts = sorted(data["Pool"].dropna().unique().tolist())
+# Pool options
+if "Pool" in data.columns:
+    pool_opts = sorted(set(map(str, data["Pool"].dropna().tolist())))
+else:
+    pool_opts = []
 pools = st.sidebar.multiselect("Pool", pool_opts)
 
-domain_opts = sorted(data["Domain"].dropna().unique().tolist())
+# Domain options
+if "Domain" in data.columns:
+    domain_opts = sorted(set(map(str, data["Domain"].dropna().tolist())))
+else:
+    domain_opts = []
 domains = st.sidebar.multiselect("Domain", domain_opts)
 
-naics_opts = sorted(data["NAICS"].dropna().unique().tolist())
+# NAICS options
+if "NAICS" in data.columns:
+    naics_opts = sorted(set(map(str, data["NAICS"].dropna().tolist())))
+else:
+    naics_opts = []
 naics = st.sidebar.multiselect("NAICS", naics_opts)
 
-sin_opts = sorted(data["SIN"].dropna().unique().tolist())
+# SIN options
+if "SIN" in data.columns:
+    sin_opts = sorted(set(map(str, data["SIN"].dropna().tolist())))
+else:
+    sin_opts = []
 sins = st.sidebar.multiselect("SIN", sin_opts)
 
+# Apply filters
 filtered = apply_filters(data, search, pools, domains, naics, sins)
+
 
 # -----------------------------
 # Summary Metrics
@@ -180,10 +211,11 @@ col1, col2, col3, col4 = st.columns(4)
 
 col1.metric("Rows", f"{len(filtered):,}")
 col2.metric("Unique Vendors", f"{filtered['Vendor Display'].nunique():,}")
-col3.metric("Unique NAICS Codes", f"{filtered['NAICS'].nunique():,}")
-col4.metric("Pools", f"{filtered['Pool'].nunique():,}")
+col3.metric("Unique NAICS Codes", f"{filtered['NAICS'].astype(str).nunique():,}")
+col4.metric("Pools", f"{filtered['Pool'].astype(str).nunique():,}")
 
 st.divider()
+
 
 # -----------------------------
 # Data Table
@@ -214,6 +246,7 @@ st.download_button(
     "text/csv"
 )
 
+
 # -----------------------------
 # Visualizations
 # -----------------------------
@@ -223,13 +256,35 @@ st.subheader("Visualizations")
 tab1, tab2, tab3 = st.tabs(["Vendors per Pool", "Top NAICS", "Domains"])
 
 with tab1:
-    chart = filtered.groupby("Pool")["Vendor Display"].nunique().sort_values(ascending=False)
-    st.bar_chart(chart)
+    if not filtered.empty:
+        chart = (
+            filtered.groupby("Pool")["Vendor Display"]
+            .nunique()
+            .sort_values(ascending=False)
+        )
+        st.bar_chart(chart)
+    else:
+        st.info("No data to display for current filters.")
 
 with tab2:
-    top = filtered.groupby("NAICS")["Vendor Display"].nunique().sort_values(ascending=False).head(20)
-    st.bar_chart(top)
+    if not filtered.empty:
+        chart = (
+            filtered.groupby("NAICS")["Vendor Display"]
+            .nunique()
+            .sort_values(ascending=False)
+            .head(20)
+        )
+        st.bar_chart(chart)
+    else:
+        st.info("No data to display for current filters.")
 
 with tab3:
-    dom = filtered.groupby("Domain")["Vendor Display"].nunique().sort_values(ascending=False)
-    st.bar_chart(dom)
+    if not filtered.empty:
+        chart = (
+            filtered.groupby("Domain")["Vendor Display"]
+            .nunique()
+            .sort_values(ascending=False)
+        )
+        st.bar_chart(chart)
+    else:
+        st.info("No data to display for current filters.")
